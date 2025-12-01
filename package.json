@@ -12,11 +12,19 @@
     "expo": "~54.0.25",
     "expo-status-bar": "~3.0.8",
     "react": "19.1.0",
-    "react-native": "0.81.5"
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-web": "^0.21.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "private": true,
+  "devEngines": {
+    "packageManager": {
+      "name": "yarn",
+      "version": "1.22.22"
+    }
+  }
 }
