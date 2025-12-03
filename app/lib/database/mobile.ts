@@ -17,69 +17,89 @@ class MobileDatabase implements Database {
   }
 
   private async executeSql<T = any>(sql: string, params: any[] = []): Promise<QueryResult<T>> {
-  return new Promise((resolve, reject) => {
-    this.db.withTransactionAsync(
-      async () => {
-        try {
-          const result = await this.db.runAsync(sql, ...params);
-          resolve({
-            rows: [],
-            insertId: result.lastInsertRowId,
-            rowsAffected: result.changes || 0
-          });
-        } catch (error) {
-          reject(error);
+    return new Promise((resolve, reject) => {
+      this.db.withTransactionAsync(
+        async () => {
+          try {
+            const result = await this.db.runAsync(sql, ...params);
+            resolve({
+              rows: [],
+              insertId: result.lastInsertRowId,
+              rowsAffected: result.changes || 0
+            });
+          } catch (error) {
+            reject(error);
+          }
         }
-      }
-    ).catch(reject);
-  });
-}
+      ).catch(reject);
+    });
+  }
 
   private async ensureTablesExist(): Promise<void> {
-    // Create escolas table
+    // Create tables if they don't exist
     await this.executeSql(`
       CREATE TABLE IF NOT EXISTS escolas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        address TEXT,
-        lastSync TEXT
+        address TEXT NOT NULL,
+        lastSync TEXT,
+        synced BOOLEAN DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT
       );
     `);
 
-    // Create turmas table
     await this.executeSql(`
       CREATE TABLE IF NOT EXISTS turmas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        EscolaId INTEGER NOT NULL,
+        EscolaId INTEGER,
         lastSync TEXT,
-        FOREIGN KEY (EscolaId) REFERENCES escolas (id) ON DELETE CASCADE
+        synced BOOLEAN DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT,
+        FOREIGN KEY (EscolaId) REFERENCES escolas (id) ON DELETE SET NULL
       );
     `);
 
-    // Create alunos table
     await this.executeSql(`
       CREATE TABLE IF NOT EXISTS alunos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        TurmaId INTEGER NOT NULL,
+        TurmaId INTEGER,
         lastSync TEXT,
-        FOREIGN KEY (TurmaId) REFERENCES turmas (id) ON DELETE CASCADE
+        synced BOOLEAN DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT,
+        FOREIGN KEY (TurmaId) REFERENCES turmas (id) ON DELETE SET NULL
       );
     `);
 
-    // Create presencas table
+    // First, check if the observacao column exists
+    const tableInfo = await this.executeSql("PRAGMA table_info(presencas)");
+    const hasObservacaoColumn = tableInfo.rows.some((col: any) => col.name === 'observacao');
+    
+    // Create the table if it doesn't exist
     await this.executeSql(`
       CREATE TABLE IF NOT EXISTS presencas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        alunoId INTEGER NOT NULL,
+        AlunoId INTEGER NOT NULL,
         date TEXT NOT NULL,
         present BOOLEAN NOT NULL,
-        syncStatus TEXT NOT NULL,
+        observacao TEXT,
         lastSync TEXT,
-        FOREIGN KEY (alunoId) REFERENCES alunos (id) ON DELETE CASCADE
+        synced BOOLEAN DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT,
+        FOREIGN KEY (AlunoId) REFERENCES alunos (id) ON DELETE CASCADE,
+        UNIQUE (AlunoId, date)
       );
     `);
+    
+    // Add the observacao column if it doesn't exist
+    if (!hasObservacaoColumn) {
+      await this.executeSql('ALTER TABLE presencas ADD COLUMN observacao TEXT');
+    } 
 
     // Create indexes for better performance
     await this.executeSql('CREATE INDEX IF NOT EXISTS idx_turmas_EscolaId ON turmas(EscolaId);');
@@ -254,24 +274,43 @@ class MobileDatabase implements Database {
     const now = new Date().toISOString();
     if (presenca.id) {
       await this.executeSql(
-        'UPDATE presencas SET AlunoId = ?, date = ?, present = ?, lastSync = ? WHERE id = ?',
-        [presenca.AlunoId, presenca.date, presenca.present ? 1 : 0, now, presenca.id]
+        'UPDATE presencas SET AlunoId = ?, date = ?, present = ?, observacao = ?, lastSync = ? WHERE id = ?',
+        [
+          presenca.AlunoId, 
+          presenca.date, 
+          presenca.present ? 1 : 0, 
+          presenca.observacao || null, 
+          now, 
+          presenca.id
+        ]
       );
       return presenca.id;
     } else {
       const result = await this.executeSql(
-        'INSERT INTO presencas (AlunoId, date, present, lastSync) VALUES (?, ?, ?, ?)',
-        [presenca.AlunoId, presenca.date, presenca.present ? 1 : 0, now]
+        'INSERT INTO presencas (AlunoId, date, present, observacao, lastSync) VALUES (?, ?, ?, ?, ?)',
+        [
+          presenca.AlunoId, 
+          presenca.date, 
+          presenca.present ? 1 : 0, 
+          presenca.observacao || null, 
+          now
+        ]
       );
       return result.insertId || 0;
     }
   }
 
   async savePresencas(presencas: PresencaDB[]): Promise<void> {
+    const now = new Date().toISOString();
     await this.executeSql('BEGIN TRANSACTION');
     try {
       for (const presenca of presencas) {
-        await this.savePresenca(presenca);
+        // Ensure observacao is included when saving in batch
+        const presencaToSave = {
+          ...presenca,
+          observacao: presenca?.observacao
+        };
+        await this.savePresenca(presencaToSave);
       }
       await this.executeSql('COMMIT');
     } catch (error) {

@@ -12,7 +12,8 @@ const TurmaList: React.FC = () => {
     erro, 
     escolaSelecionada, 
     selecionarTurma,
-    buscarTurmasByEscolaId
+    buscarTurmasByEscolaId,
+    turmaSelecionada
   } = usePresenca();
 
   if (!escolaSelecionada) return null;
@@ -33,7 +34,10 @@ const TurmaList: React.FC = () => {
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={styles.item}
+            style={[styles.item, turmaSelecionada?.id === item.id && { 
+              backgroundColor: '#e3f2fd',
+              pointerEvents: 'none',
+            }]}
             onPress={() => selecionarTurma(item)}
           >
             <Text style={styles.itemText}>{item.name}</Text>

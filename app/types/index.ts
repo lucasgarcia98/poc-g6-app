@@ -29,6 +29,7 @@ export interface Presenca extends BaseEntity {
   AlunoId: number;
   date: string; // Formato: YYYY-MM-DD
   present: boolean;
+  observacao?: string;
   lastSync?: string;
 }
 
@@ -49,7 +50,7 @@ export interface PresencaContextData {
   buscarAlunos: (db?: Database) => Promise<void>;
   buscarPresencasPorAluno: (alunoId: number, data?: string) => Promise<void>;
   buscarPresencasSemFiltro: () => Promise<void>;
-  registrarPresenca: (alunoId: number, presente: boolean) => Promise<void>;
+  registrarPresenca: (alunoId: number, presente: boolean, observacao?: string) => Promise<boolean>;
   alterarData: (data: string) => void;
   alterarAluno: (aluno: Aluno) => void;
   buscarTurmasByEscolaId: (escolaId: number) => Promise<void>;

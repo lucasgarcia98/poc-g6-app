@@ -1,6 +1,6 @@
 // app/components/AlunoList.tsx
-import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
 import { usePresenca } from '../contexts/PresencaContext';
 import Loading from './Loading';
 
@@ -15,19 +15,48 @@ const AlunoList: React.FC = () => {
   } = usePresenca();
   
   const [atualizando, setAtualizando] = useState<boolean>(false);
+  const [observacoes, setObservacoes] = useState<Record<number, string>>({});
+
+  // Initialize observacoes with existing data
+  useEffect(() => {
+    const initialObservations = alunos.reduce((acc, aluno) => {
+      const presenca = aluno.Presencas?.find(p => p.date === dataSelecionada);
+      if (presenca?.observacao) {
+        acc[aluno.id!] = presenca.observacao;
+      }
+      return acc;
+    }, {} as Record<number, string>);
+    
+    setObservacoes(prev => ({
+      ...prev,
+      ...initialObservations
+    }));
+  }, [alunos, dataSelecionada]);
   
   if (!turmaSelecionada) return null;
 
   const handleTogglePresenca = async (alunoId: number, present: boolean) => {
     try {
       setAtualizando(true);
-      await registrarPresenca(alunoId, !present);
+      const observacao = observacoes[alunoId] || '';
+      await registrarPresenca(alunoId, !present, observacao);
     } finally {
       setAtualizando(false);
       const aluno = alunos.find(a => a.id === alunoId)!;
-      aluno.Presencas = aluno.Presencas?.map(p => p.date === dataSelecionada ? { ...p, present: !present } : p) ?? [];
+      const presenca = aluno.Presencas?.find(p => p.date === dataSelecionada);
+      if (presenca) {
+        presenca.present = !present;
+        presenca.observacao = observacoes[alunoId] || '';
+      }
       alterarAluno(aluno);
     }
+  };
+
+  const handleObservacaoChange = (alunoId: number, text: string) => {
+    setObservacoes(prev => ({
+      ...prev,
+      [alunoId]: text
+    }));
   };
 
   if (carregando && !turmaSelecionada) {
@@ -48,6 +77,12 @@ const AlunoList: React.FC = () => {
               present ? styles.presente : styles.ausente
             ]}>
               <Text style={styles.itemText}>{item.name}</Text>
+              <TextInput 
+                style={styles.observacao} 
+                placeholder="Observação" 
+                onChangeText={(text) => handleObservacaoChange(item.id!, text)}
+                value={observacoes[item.id!] || ''}
+              />
               <TouchableOpacity
                 style={[styles.botaoPresenca, atualizando && styles.botaoDesabilitado]}
                 onPress={() => !atualizando && handleTogglePresenca(Number(item.id), present)}
@@ -124,6 +159,15 @@ const styles = StyleSheet.create({
   botaoTexto: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  observacao: {
+    height: 40,
+    borderColor: '#ccc',
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+    marginTop: 10,
   },
 });
 

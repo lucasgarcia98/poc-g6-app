@@ -597,86 +597,62 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [db, isOnline, request]);
 
   // Função para registrar presença
-  const registrarPresenca = useCallback(async (alunoId: number, presente: boolean) => {
-  if (!db) return false;
+  const registrarPresenca = useCallback(async (alunoId: number, presente: boolean, observacao?: string) => {
+    if (!db) return false;
 
-  const now = new Date().toISOString();
-  const novaPresenca: Presenca = {
-    AlunoId: alunoId,
-    date: dataSelecionada,
-    present: presente,
-    createdAt: now,
-    updatedAt: now,
-    synced: !isOnline // Se estiver offline, marca como não sincronizado
-  };
-
-  try {
-    // Salva localmente primeiro
-    await db.savePresenca(novaPresenca);
+    const now = new Date().toISOString();
+    const novaPresenca: Presenca = {
+      AlunoId: alunoId,
+      date: dataSelecionada,
+      present: presente,
+      observacao: observacao,
+      createdAt: now,
+      updatedAt: now,
+      synced: !isOnline // Se estiver offline, marca como não sincronizado
+    };
     
-    // Atualiza o estado local
-    const presencasAtualizadas = await db.getPresencas();
-    setPresencas(presencasAtualizadas.map(p => ({
-      id: p.id!,
-      AlunoId: p.AlunoId!,
-      date: p.date,
-      present: p.present,
-      synced: false,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt
-    })));
+    try {
+      // Salva localmente primeiro
+      await db.savePresenca(novaPresenca);
+      
+      // Atualiza o estado local
+      const presencasAtualizadas = await db.getPresencas();
+      setPresencas(presencasAtualizadas.map(p => ({
+        id: p.id!,
+        AlunoId: p.AlunoId!,
+        date: p.date,
+        present: p.present,
+        observacao: p.observacao,
+        synced: false,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt
+      })));
 
-    // Se estiver online, tenta sincronizar
-    if (isOnline) {
-      try {
-        await request(`${API_BASE_URL}/api/presencas`, {
-          method: 'POST',
-          body: JSON.stringify(novaPresenca)
-        });
-        // Atualiza como sincronizado no banco local
-        await db.updatePresencaSyncStatus(novaPresenca.id!, true);
-      } catch (error) {
-        console.error('Erro ao sincronizar presença:', error);
-        // Não precisa fazer nada, a sincronização será tentada novamente depois
+      // Se estiver online, tenta sincronizar
+      if (isOnline) {
+        try {
+          const response = await request(`${API_BASE_URL}/api/presencas`, {
+            method: 'POST',
+            body: JSON.stringify(novaPresenca)
+          });
+          if(response) {
+            novaPresenca.id = response.id;
+          }
+          // Atualiza como sincronizado no banco local
+          await db.updatePresencaSyncStatus(novaPresenca.id!, true);
+        } catch (error) {
+          console.error('Erro ao sincronizar presença:', error);
+          // Não precisa fazer nada, a sincronização será tentada novamente depois
+        }
       }
+
+      return true;
+    } catch (error) {
+      console.error('Erro ao salvar presença localmente:', error);
+      return false;
     }
+  }, [db, dataSelecionada, isOnline, request]);
 
-    return true;
-  } catch (error) {
-    console.error('Erro ao salvar presença localmente:', error);
-    return false;
-  }
-}, [db, dataSelecionada, isOnline, request]);
-
-//   const sincronizarPresencasPendentes = useCallback(async () => {
-//   if (!db || !isOnline) return;
-
-//   try {
-//     const presencasPendentes = await db.getPresencasPendentes();
-    
-//     for (const presenca of presencasPendentes) {
-//       try {
-//         await request(`${API_BASE_URL}/api/presencas`, {
-//           method: 'POST',
-//           body: JSON.stringify(presenca)
-//         });
-//         // Atualiza como sincronizado no banco local
-//         await db.updatePresencaSyncStatus(presenca.id!, true);
-//       } catch (error) {
-//         console.error(`Erro ao sincronizar presença ${presenca.id}:`, error);
-//         // Continua tentando as próximas presenças mesmo se uma falhar
-//       }
-//     }
-//   } catch (error) {
-//     console.error('Erro ao buscar presenças pendentes:', error);
-//   }
-// }, [db, isOnline, request]);
-
-// useEffect(() => {
-//   if (isOnline) {
-//     sincronizarPresencasPendentes();
-//   }
-// }, [isOnline, sincronizarPresencasPendentes]);
 
   // Função para selecionar escola
   const selecionarEscola = useCallback(async (escola: Escola) => {
@@ -731,9 +707,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
         buscarAlunos,
         buscarPresencasPorAluno,
         buscarPresencasSemFiltro,
-        registrarPresenca: async (alunoId: number, presente: boolean) => {
-          await registrarPresenca(alunoId, presente);
-        },
+        registrarPresenca,
         alterarData,
         alterarAluno,
         buscarTurmasByEscolaId,

@@ -10,9 +10,9 @@ export class SyncService {
   // Sync all data
   async syncAll(): Promise<{ success: boolean; message: string }> {
     try {
-      await this.syncEscolas();
-      await this.syncTurmas();
-      await this.syncAlunos();
+      // await this.syncEscolas();
+      // await this.syncTurmas();
+      // await this.syncAlunos();
       await this.syncPresencas();
       return { success: true, message: 'Sincronização concluída com sucesso' };
     } catch (error) {

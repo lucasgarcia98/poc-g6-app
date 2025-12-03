@@ -1,6 +1,7 @@
 // app/lib/database/web.ts
-import Dexie, { Table } from 'dexie';
+import Dexie, { add, Table } from 'dexie';
 import { Database, EscolaDB, TurmaDB, AlunoDB, PresencaDB } from './types';
+import { Presenca } from '@/app/types';
 
 class WebDatabase extends Dexie implements Database {
   escolas!: Table<EscolaDB, number>;
@@ -15,7 +16,7 @@ class WebDatabase extends Dexie implements Database {
       escolas: '++id, name, address, createdAt, updatedAt, lastSync',
       turmas: '++id, name, EscolaId, createdAt, updatedAt, lastSync, [EscolaId]',
       alunos: '++id, name, TurmaId, createdAt, updatedAt, lastSync, [TurmaId]',
-      presencas: '++id, AlunoId, date, presente, lastSync, createdAt, updatedAt, [AlunoId+date]'
+      presencas: '++id, AlunoId, date, presente, observacao, lastSync, createdAt, updatedAt, [AlunoId+date]'
     });
   }
   // Escola methods
@@ -147,24 +148,88 @@ async deleteEscola(id: number): Promise<void> {
     return this.presencas.get(id);
   }
 
+  async updatePresencasInAluno(alunoId: number, present: boolean, date: string, observacao: string = ''): Promise<number> {
+    const aluno = await this.alunos.get(alunoId);
+    if (!aluno) return 0;
+    
+    let novasPresencas: Presenca[] = [];
+
+    if(aluno?.Presencas) {
+      const existingPresencaIndex = aluno.Presencas.findIndex(p => p.date === date);
+      if (existingPresencaIndex >= 0) {
+        // Update existing presenca
+        novasPresencas = [...aluno.Presencas];
+        novasPresencas[existingPresencaIndex] = { 
+          ...novasPresencas[existingPresencaIndex], 
+          present,
+          observacao: observacao || novasPresencas[existingPresencaIndex].observacao
+        };
+      } else {
+        // Add new presenca
+        const novaPresenca: Presenca = { 
+          AlunoId: alunoId, 
+          date, 
+          present, 
+          observacao,
+          synced: false 
+        };
+        novasPresencas = [...aluno.Presencas, novaPresenca];
+      }
+    } else {
+      const novaPresenca: Presenca = { 
+        AlunoId: alunoId, 
+        date, 
+        present, 
+        observacao,
+        synced: false 
+      };
+      novasPresencas.push(novaPresenca);
+    }
+    
+    const updateAluno = await this.alunos.update(alunoId, {
+      Presencas: novasPresencas,
+    });
+
+    console.log({
+      updateAluno
+    });
+
+    return updateAluno
+  }
+
   async savePresenca(presenca: PresencaDB): Promise<number> {
     const now = new Date().toISOString();
     const presencaToSave:PresencaDB = {
       ...presenca,
       lastSync: now,
     };
-
     if (presenca.id) {
-      await this.presencas.update(presenca.id, presencaToSave);
+      const update = await this.presencas.update(presenca.id, presencaToSave);
+      if(update) {
+        await this.updatePresencasInAluno(
+          presenca.AlunoId, 
+          presenca.present, 
+          presenca.date, 
+          presenca.observacao
+        );
+      }
       return presenca.id;
     }
-    return this.presencas.add(presencaToSave);
+    const addPresenca =  await this.presencas.add(presencaToSave);
+
+    if(addPresenca) {
+      await this.updatePresencasInAluno(
+        presenca.AlunoId, 
+        presenca.present, 
+        presenca.date, 
+        presenca.observacao
+      );
+    }
+
+    return addPresenca
   }
 
   async savePresencas(presencas: PresencaDB[]): Promise<void> {
-    console.log({
-      presencas
-    })
     const now = new Date().toISOString();
     await this.presencas.bulkPut(
       presencas.map(p => ({
@@ -196,6 +261,9 @@ async deleteEscola(id: number): Promise<void> {
 
   async updatePresencaSyncStatus(id: number, synced: boolean): Promise<void> {
     const now = new Date().toISOString();
+    console.log({
+      id, now, synced
+    })
     await this.presencas.update(id, { lastSync: synced ? now : undefined });
   }
 }
