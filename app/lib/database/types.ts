@@ -25,7 +25,7 @@ export interface PresencaDB extends Omit<Presenca, 'id'> {
   observacao?: string;
   AlunoId: number;
   lastSync?: string;
-  aluno?: AlunoDB | null;
+  Aluno?: AlunoDB | null;
   synced: boolean;
 }
 

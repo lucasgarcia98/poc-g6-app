@@ -1,13 +1,11 @@
 // app/components/AlunoList.tsx
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { usePresenca } from '../contexts/PresencaContext';
-import Loading from './Loading';
 
 const AlunoList: React.FC = () => {
   const { 
     alunos,
-    carregando, 
     turmaSelecionada, 
     registrarPresenca,
     dataSelecionada,
@@ -72,44 +70,41 @@ const AlunoList: React.FC = () => {
     }));
   };
 
-  if (carregando && !turmaSelecionada) {
-    return <Loading message="Carregando alunos..." />;
-  }
-
   return (
+    <ScrollView>
     <View style={styles.container}>
       <Text style={styles.titulo}>Alunos da Turma {turmaSelecionada.name}:</Text>
-      <FlatList
-        data={alunos}
-        keyExtractor={(item) => String(item.id)}
-        renderItem={({ item }) => {
-          const present = item.Presencas?.some(p => p.date === dataSelecionada && p.present) ?? false;
-          return (
-            <View style={[
+      {alunos.map(item => {
+        const present = item.Presencas?.some(p => p.date === dataSelecionada && p.present) ?? false;
+        return (
+          <View
+            key={String(item.id)}
+            style={[
               styles.item,
               present ? styles.presente : styles.ausente
-            ]}>
-              <Text style={styles.itemText}>{item.name}</Text>
-              <TextInput 
-                style={styles.observacao} 
-                placeholder="Observação" 
-                onChangeText={(text) => handleObservacaoChange(item.id!, text)}
-                value={observacoes[item.id!] || ''}
-              />
-              <TouchableOpacity
-                style={[styles.botaoPresenca, atualizando && styles.botaoDesabilitado]}
-                onPress={() => !atualizando && handleTogglePresenca(Number(item.id), present)}
-                disabled={atualizando}
-              >
-                <Text style={styles.botaoTexto}>
-                  {present ? 'Presente' : 'Ausente'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          );
-        }}
-      />
+            ]}
+          >
+            <Text style={styles.itemText}>{item.name}</Text>
+            <TextInput 
+              style={styles.observacao} 
+              placeholder="Observação" 
+              onChangeText={(text) => handleObservacaoChange(item.id!, text)}
+              value={observacoes[item.id!] || ''}
+            />
+            <TouchableOpacity
+              style={[styles.botaoPresenca, atualizando && styles.botaoDesabilitado]}
+              onPress={() => !atualizando && handleTogglePresenca(Number(item.id), present)}
+              disabled={atualizando}
+            >
+              <Text style={styles.botaoTexto}>
+                {present ? 'Presente' : 'Ausente'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        );
+      })}
     </View>
+    </ScrollView>
   );
 };
 
@@ -135,7 +130,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 1.41,
     elevation: 2,
-    maxHeight: 300
+    maxHeight: 300,
+    overflow: 'scroll'
   },
   titulo: {
     fontSize: 16,

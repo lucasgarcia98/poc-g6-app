@@ -9,9 +9,9 @@ export class SyncService {
   // Sync all data
   async syncAll(): Promise<{ success: boolean; message: string }> {
     try {
-      await this.syncEscolas();
-      await this.syncTurmas();
-      await this.syncAlunos();
+      // await this.syncEscolas();
+      // await this.syncTurmas();
+      // await this.syncAlunos();
       await this.syncPresencas();
       return { success: true, message: 'Sincronização concluída com sucesso' };
     } catch (error) {
@@ -67,13 +67,25 @@ export class SyncService {
   }
 
   private async syncPresencas(): Promise<void> {
-    const unsyncedPresencas = await this.db.getPresencas()
+    const unsyncedPresencas = await this.db.getPresencasPendentes()
     
     try {
-         await this.request(`${API_URL}/api/presencas/sync`, {
+         const presencasAtualizadas = await this.request<{sucessos: string, falhas: string, message: string}>(`${API_URL}/api/presencas/sync`, {
             method: 'POST',
             body: JSON.stringify({presencas: unsyncedPresencas})
         })
+        
+        if (presencasAtualizadas?.sucessos) {
+          JSON.parse(presencasAtualizadas.sucessos).forEach((p: Presenca) => {
+            this.db.updatePresencaSyncStatus(p.id!, true)
+          })
+        }
+
+        if (presencasAtualizadas?.falhas) {
+          JSON.parse(presencasAtualizadas.falhas).forEach((p: Presenca) => {
+            this.db.updatePresencaSyncStatus(p.id!, false)
+          })
+        }
     } catch (error) {
         console.error(`Erro ao sincronizar presencas:`, error);
         throw error;

@@ -1,11 +1,86 @@
-diff --git a/Libraries/Core/setUpXHR.js b/Libraries/Core/setUpXHR.js
-index 8c9b7d1..d1b3c22 100644
---- a/Libraries/Core/setUpXHR.js
-+++ b/Libraries/Core/setUpXHR.js
-@@ -15,7 +15,8 @@
-  * Initialization of XMLHttpRequest and fetch.
-  */
-
--import 'abort-controller/dist/abort-controller';
-+// PATCH: Disable abort-controller polyfill (causes Hermes crashes on Android)
-+// import 'abort-controller/dist/abort-controller';
+diff --git a/node_modules/react-native/src/private/webapis/dom/events/Event.js b/node_modules/react-native/src/private/webapis/dom/events/Event.js
+index 6f61673..a106fbe 100644
+--- a/node_modules/react-native/src/private/webapis/dom/events/Event.js
++++ b/node_modules/react-native/src/private/webapis/dom/events/Event.js
+@@ -44,12 +44,12 @@ export interface EventInit {
+ }
+ 
+ export default class Event {
+-  static +NONE: 0;
++  // static +NONE: 0;
+   static +CAPTURING_PHASE: 1;
+   static +AT_TARGET: 2;
+   static +BUBBLING_PHASE: 3;
+ 
+-  +NONE: 0;
++  // +NONE: 0;
+   +CAPTURING_PHASE: 1;
+   +AT_TARGET: 2;
+   +BUBBLING_PHASE: 3;
+@@ -184,50 +184,58 @@ export default class Event {
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event, 'NONE', {
+-  enumerable: true,
+   value: 0,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event.prototype, 'NONE', {
+-  enumerable: true,
+   value: 0,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event, 'CAPTURING_PHASE', {
+-  enumerable: true,
+   value: 1,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event.prototype, 'CAPTURING_PHASE', {
+-  enumerable: true,
+   value: 1,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event, 'AT_TARGET', {
+-  enumerable: true,
+   value: 2,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event.prototype, 'AT_TARGET', {
+-  enumerable: true,
+   value: 2,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event, 'BUBBLING_PHASE', {
+-  enumerable: true,
+   value: 3,
++  configurable: true,
++  writable: true,
+ });
+ 
+ // $FlowExpectedError[cannot-write]
+ Object.defineProperty(Event.prototype, 'BUBBLING_PHASE', {
+-  enumerable: true,
+   value: 3,
++  configurable: true,
++  writable: true,
+ });
+ 
+ export type EventPhase =

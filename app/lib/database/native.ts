@@ -127,28 +127,23 @@ class MobileDatabase implements Database {
   async saveEscola(escola: EscolaDB): Promise<number> {
     const now = new Date().toISOString();
 
-    if (escola.id) {
-      await this.executeSql(
-        'UPDATE escolas SET name = ?, address = ?, lastSync = ? WHERE id = ?',
-        [escola.name, escola.address, now, escola.id]
-      );
-      return escola.id;
-    }
-
     const result = await this.executeSql(
-      'INSERT INTO escolas (name, address, lastSync) VALUES (?, ?, ?)',
-      [escola.name, escola.address, now]
+      escola.id
+        // Upsert preserving id when coming from server
+        ? 'INSERT OR REPLACE INTO escolas (id, name, address, lastSync) VALUES (?, ?, ?, ?)' 
+        : 'INSERT INTO escolas (name, address, lastSync) VALUES (?, ?, ?)',
+      escola.id
+        ? [escola.id, escola.name, escola.address, now]
+        : [escola.name, escola.address, now]
     );
 
     return result.insertId!;
   }
 
   async saveEscolas(escolas: EscolaDB[]): Promise<void> {
-    await this.db.withTransactionAsync(async () => {
-      for (const escola of escolas) {
-        await this.saveEscola(escola);
-      }
-    });
+    for (const escola of escolas) {
+      await this.saveEscola(escola)
+    }
   }
 
   async deleteEscola(id: number): Promise<void> {
@@ -176,28 +171,22 @@ class MobileDatabase implements Database {
   async saveTurma(turma: TurmaDB): Promise<number> {
     const now = new Date().toISOString();
 
-    if (turma.id) {
-      await this.executeSql(
-        'UPDATE turmas SET name = ?, EscolaId = ?, lastSync = ? WHERE id = ?',
-        [turma.name, turma.EscolaId, now, turma.id]
-      );
-      return turma.id;
-    }
-
     const result = await this.executeSql(
-      'INSERT INTO turmas (name, EscolaId, lastSync) VALUES (?, ?, ?)',
-      [turma.name, turma.EscolaId, now]
+      turma.id
+        ? 'INSERT OR REPLACE INTO turmas (id, name, EscolaId, lastSync) VALUES (?, ?, ?, ?)' 
+        : 'INSERT INTO turmas (name, EscolaId, lastSync) VALUES (?, ?, ?)',
+      turma.id
+        ? [turma.id, turma.name, turma.EscolaId, now]
+        : [turma.name, turma.EscolaId, now]
     );
 
     return result.insertId!;
   }
 
   async saveTurmas(turmas: TurmaDB[]): Promise<void> {
-    await this.db.withTransactionAsync(async () => {
-      for (const turma of turmas) {
-        await this.saveTurma(turma);
-      }
-    });
+    for (const turma of turmas) {
+      await this.saveTurma(turma);
+    }
   }
 
   async deleteTurma(id: number): Promise<void> {
@@ -225,28 +214,22 @@ class MobileDatabase implements Database {
   async saveAluno(aluno: AlunoDB): Promise<number> {
     const now = new Date().toISOString();
 
-    if (aluno.id) {
-      await this.executeSql(
-        'UPDATE alunos SET name = ?, TurmaId = ?, lastSync = ? WHERE id = ?',
-        [aluno.name, aluno.TurmaId, now, aluno.id]
-      );
-      return aluno.id;
-    }
-
     const result = await this.executeSql(
-      'INSERT INTO alunos (name, TurmaId, lastSync) VALUES (?, ?, ?)',
-      [aluno.name, aluno.TurmaId, now]
+      aluno.id
+        ? 'INSERT OR REPLACE INTO alunos (id, name, TurmaId, lastSync) VALUES (?, ?, ?, ?)' 
+        : 'INSERT INTO alunos (name, TurmaId, lastSync) VALUES (?, ?, ?)',
+      aluno.id
+        ? [aluno.id, aluno.name, aluno.TurmaId, now]
+        : [aluno.name, aluno.TurmaId, now]
     );
 
     return result.insertId!;
   }
 
   async saveAlunos(alunos: AlunoDB[]): Promise<void> {
-    await this.db.withTransactionAsync(async () => {
-      for (const aluno of alunos) {
-        await this.saveAluno(aluno);
-      }
-    });
+    for (const aluno of alunos) {
+      await this.saveAluno(aluno);
+    }
   }
 
   async deleteAluno(id: number): Promise<void> {
@@ -267,44 +250,55 @@ class MobileDatabase implements Database {
     return result.rows[0];
   }
 
+  async getPresencasByAlunoIdAndDate(alunoId: number, date: string): Promise<PresencaDB | undefined> {
+    const result = await this.executeSql<PresencaDB>('SELECT * FROM presencas WHERE AlunoId = ? AND date = ?', [alunoId, date]);
+    return result.rows[0];
+  }
+
   async savePresenca(presenca: PresencaDB): Promise<number> {
     const now = new Date().toISOString();
+    console.log('presenca: ', {presenca})
 
-    if (presenca.id) {
-      await this.executeSql(
-        'UPDATE presencas SET AlunoId = ?, date = ?, present = ?, observacao = ?, lastSync = ? WHERE id = ?',
-        [
+      const alunoId = presenca.AlunoId || presenca?.Aluno?.id
+      if(!alunoId) {
+        return 0;
+      }
+      const find = await this.getPresencasByAlunoIdAndDate(alunoId, presenca.date);
+      if(find?.synced) return 0;
+      if (find) {
+        presenca.id = find.id;
+      }
+
+    const result = await this.executeSql(
+      presenca.id
+        ? 'UPDATE presencas SET AlunoId = ?, date = ?, present = ?, observacao = ?, lastSync = ? WHERE id = ?'
+        : 'INSERT INTO presencas (AlunoId, date, present, observacao, lastSync) VALUES (?, ?, ?, ?, ?)',
+      presenca.id
+        ? [
           presenca.AlunoId,
           presenca.date,
           presenca.present ? 1 : 0,
-          presenca.observacao ?? null,
+          presenca.observacao ?? '',
           now,
           presenca.id
-        ]
-      );
-      return presenca.id;
-    }
-
-    const result = await this.executeSql(
-      'INSERT INTO presencas (AlunoId, date, present, observacao, lastSync) VALUES (?, ?, ?, ?, ?)',
-      [
-        presenca.AlunoId,
-        presenca.date,
-        presenca.present ? 1 : 0,
-        presenca.observacao ?? null,
-        now
-      ]
+          ]
+        : [
+            presenca.AlunoId,
+            presenca.date,
+            presenca.present ? 1 : 0,
+            presenca.observacao ?? '',
+            now
+          ]
     );
-
     return result.insertId!;
   }
 
   async savePresencas(presencas: PresencaDB[]): Promise<void> {
-    await this.db.withTransactionAsync(async () => {
-      for (const p of presencas) {
-        await this.savePresenca(p);
-      }
-    });
+    for (const p of presencas) {
+      if(p.synced) continue;
+
+      await this.savePresenca(p);
+    }
   }
 
   async deletePresenca(id: number): Promise<void> {

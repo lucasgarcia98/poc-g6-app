@@ -37,6 +37,9 @@ export function useApi<T = any>(): {
         setLoading(true);
         setError(null);
 
+        console.log({
+          url, options
+        })
         const response = await fetch(url, {
           ...options,
           headers: {
@@ -61,6 +64,7 @@ export function useApi<T = any>(): {
 
         return responseData;
       } catch (err) {
+        console.error(err)
         const errorMessage =
           err instanceof Error ? err.message : 'Ocorreu um erro desconhecido';
 

@@ -262,10 +262,8 @@ class WebDatabase extends Dexie implements Database {
   }
 
   async getPresencasPendentes(): Promise<PresencaDB[]> {
-    return this.presencas
-      .where('synced')
-      .equals('')
-      .toArray();
+    const all = await this.presencas.toArray();
+    return all.filter(p => !p.synced);
   }
 
   async clearDatabase(): Promise<void> {
@@ -285,5 +283,8 @@ class WebDatabase extends Dexie implements Database {
 
 export const init = async (): Promise<Database> => {
   const db = new WebDatabase();
+  if(db) {
+    console.log('banco web iniciado')
+  }
   return db;
 };

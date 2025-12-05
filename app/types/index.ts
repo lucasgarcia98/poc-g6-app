@@ -58,4 +58,5 @@ export interface PresencaContextData {
   isOnline: boolean;
   sincronizar: () => Promise<boolean | undefined>;
   syncStatus: { loading: boolean; lastSync?: Date; error?: string };
+  pendingPresencas: number;
 }

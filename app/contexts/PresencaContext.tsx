@@ -96,6 +96,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   const [syncStatus, setSyncStatus] = useState<{ loading: boolean; lastSync?: Date; error?: string }>({
     loading: false
   });
+  const [pendingPresencas, setPendingPresencas] = useState<number>(0);
 
   // --- refs to keep stable instances ---
   const dbRef = useRef<Database | null>(null);
@@ -114,6 +115,30 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   const safeSetErro = useCallback((message: string | null) => {
     setErro(message);
   }, []);
+
+  // Ensure DB is initialized before any operation that needs it
+  const waitForDb = useCallback(async (): Promise<Database | null> => {
+    try {
+      if (dbRef.current) return dbRef.current;
+
+      if (!initializingRef.current) {
+        initializingRef.current = initDatabase();
+      }
+
+      const db = await initializingRef.current;
+      dbRef.current = db;
+
+      if (!syncServiceRef.current) {
+        syncServiceRef.current = new SyncService(db, requestRef.current);
+      }
+
+      return db;
+    } catch (err) {
+      console.error('Erro ao aguardar inicialização do DB:', err);
+      safeSetErro('Falha ao inicializar o armazenamento local');
+      return null;
+    }
+  }, [safeSetErro]);
 
   // Initialize DB once on mount
   useEffect(() => {
@@ -207,17 +232,18 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
 
   // --- Helper: load local data into state (fast) ---
   const loadLocalData = useCallback(async () => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
 
     try {
       setCarregando(true);
       // Load escolas, turmas, alunos, presencas from local DB
-      const [localEscolas, localTurmas, localAlunos, localPresencas] = await Promise.all([
+      const [localEscolas, localTurmas, localAlunos, localPresencas, pendentes] = await Promise.all([
         db.getEscolas(),
         db.getTurmas(),
         db.getAlunos(),
-        db.getPresencas()
+        db.getPresencas(),
+        db.getPresencasPendentes()
       ]);
 
       setEscolas(localEscolas.map(mapDbEscolaToEscola));
@@ -227,6 +253,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
       setAlunos(localAlunos.map(mapDbAlunoToAluno));
 
       setPresencas(localPresencas.map(mapDbPresencaToPresenca));
+      setPendingPresencas(pendentes.length);
     } catch (err) {
       console.error('Erro ao carregar dados locais:', err);
       safeSetErro('Erro ao carregar dados locais');
@@ -237,7 +264,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
 
   // --- Sync: push & pull (single in-flight) ---
   const sincronizar = useCallback(async (): Promise<boolean> => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     const syncService = syncServiceRef.current;
     if (!db || !syncService) {
       setSyncStatus({ loading: false, error: 'Serviço de sincronização não inicializado' });
@@ -261,6 +288,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
     setTurmaSelecionada(null);
     isSyncingRef.current = true;
     setSyncStatus({ loading: true });
+    setCarregando(true);
 
     try {
       // Push local pending
@@ -280,6 +308,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
       return false;
     } finally {
       isSyncingRef.current = false;
+      setCarregando(false);
     }
   }, [isOnline, loadLocalData]);
 
@@ -287,11 +316,11 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   // All these functions use dbRef and requestRef to avoid unstable deps
 
   const buscarEscolas = useCallback(async () => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
-
+    
     try {
       let escolasData: Escola[] = [];
 
@@ -301,9 +330,9 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           if (resp && Array.isArray(resp)) {
             escolasData = resp;
             // normalize and save to local db
-            await db.saveEscolas(escolasData.map(e => ({
+            db.saveEscolas(escolasData.map(e => ({
               id: e.id,
-              name: e.name,
+              name: e.name, 
               address: e.address,
               createdAt: e.createdAt,
               updatedAt: e.updatedAt,
@@ -314,7 +343,6 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           console.warn('API escolas falhou, usando local', err);
         }
       }
-
       if (escolasData.length === 0) {
         const local = await db.getEscolas();
         escolasData = local.map(mapDbEscolaToEscola);
@@ -330,7 +358,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarTurmas = useCallback(async () => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -343,7 +371,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           const resp = await requestRef.current<Turma[]>(`${API_URL}/api/turmas`);
           if (resp && Array.isArray(resp)) {
             turmasData = resp;
-            await db.saveTurmas(resp.map(t => ({
+            db.saveTurmas(resp.map(t => ({
               id: t.id,
               name: t.name,
               EscolaId: t.EscolaId,
@@ -372,7 +400,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarTurmasByEscolaId = useCallback(async (escolaId: number) => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -385,7 +413,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           const resp = await requestRef.current<Turma[]>(`${API_URL}/api/escolas/${escolaId}/turmas`);
           if (resp && Array.isArray(resp)) {
             turmasData = resp;
-            await db.saveTurmas(resp.map(t => ({
+            db.saveTurmas(resp.map(t => ({
               id: t.id,
               name: t.name,
               EscolaId: t.EscolaId,
@@ -414,7 +442,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarAlunos = useCallback(async () => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -427,7 +455,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           const resp = await requestRef.current<Aluno[]>(`${API_URL}/api/alunos`);
           if (resp && Array.isArray(resp)) {
             alunosData = resp;
-            await db.saveAlunos(resp.map(a => {
+            db.saveAlunos(resp.map(a => {
               if(!a.TurmaId) return;
 
               return {
@@ -461,7 +489,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarAlunosByTurmaId = useCallback(async (turmaId: number) => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -474,7 +502,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
           const resp = await requestRef.current<Aluno[]>(`${API_URL}/api/turmas/${turmaId}/alunos`);
           if (resp && Array.isArray(resp)) {
             alunosData = resp;
-            await db.saveAlunos(resp.map(a => {
+            db.saveAlunos(resp.map(a => {
               if(!a.TurmaId) return;
 
               return {
@@ -508,7 +536,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarPresencasPorAluno = useCallback(async (alunoId: number, date?: string) => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -537,7 +565,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
               createdAt: p.createdAt,
               updatedAt: p.updatedAt
             }));
-            await db.savePresencas(presencasData);
+            db.savePresencas(presencasData);
           }
         } catch (err) {
           console.warn('API presencas por aluno falhou, usando local', err);
@@ -561,7 +589,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   }, [isOnline]);
 
   const buscarPresencasSemFiltro = useCallback(async () => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return;
     setCarregando(true);
     setErro(null);
@@ -584,7 +612,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
               createdAt: p.createdAt,
               updatedAt: p.updatedAt
             }));
-            await db.savePresencas(presencasData);
+            db.savePresencas(presencasData);
           }
         } catch (err) {
           console.warn('API presencas falhou, usando local', err);
@@ -607,7 +635,7 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
 
   // --- registrar presença (local-first) ---
   const registrarPresenca = useCallback(async (alunoId: number, presente: boolean, observacao?: string) => {
-    const db = dbRef.current;
+    const db = await waitForDb();
     if (!db) return false;
 
     const now = new Date().toISOString();
@@ -618,33 +646,35 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
       observacao: observacao ?? '',
       createdAt: now,
       updatedAt: now,
-      synced: isOnline // mark true only if we can persist synced state meaningfully; we'll update later if we actually send
+      synced: false // mark true only if we can persist synced state meaningfully; we'll update later if we actually send
     };
 
+    console.log({novaPresenca})
     try {
       setCarregando(true);
       await db.savePresenca(novaPresenca);
 
       // Update UI from local DB for stable truth
       const local = await db.getPresencas();
+      console.log('presencas local: ', {local})
       setPresencas(local.map(mapDbPresencaToPresenca));
+      const pendentes = await db.getPresencasPendentes();
+      setPendingPresencas(pendentes.length);
 
       // If online, try immediate network post (best-effort)
       if (isOnline) {
-        try {
-          const resp = await requestRef.current(`${API_URL}/api/presencas`, {
-            method: 'POST',
-            body: JSON.stringify(novaPresenca)
-          });
-          if (resp && resp.id) {
-            // set as synced in local DB
-            await db.updatePresencaSyncStatus(resp.id, true);
-            // reload local presencas
-            const reloaded = await db.getPresencas();
-            setPresencas(reloaded.map(mapDbPresencaToPresenca));
-          }
-        } catch (err) {
-          console.warn('Não foi possível enviar presença agora — ficará pendente para próxima sincronização', err);
+        const resp = await requestRef.current(`${API_URL}/api/presencas`, {
+          method: 'POST',
+          body: JSON.stringify(novaPresenca)
+        });
+        if (resp && resp.id) {
+          // set as synced in local DB
+          await db.updatePresencaSyncStatus(resp.id, true);
+          // reload local presencas
+          const reloaded = await db.getPresencas();
+          setPresencas(reloaded.map(mapDbPresencaToPresenca));
+          const pend = await db.getPresencasPendentes();
+          setPendingPresencas(pend.length);
         }
       }
 
@@ -662,16 +692,20 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   const selecionarEscola = useCallback(async (escola: Escola | null) => {
     setEscolaSelecionada(escola);
     setTurmaSelecionada(null);
+    setCarregando(true);
     if (escola && escola.id !== undefined && escola.id !== null) {
       await buscarTurmasByEscolaId(escola.id);
     }
+    setCarregando(false);
   }, [buscarTurmasByEscolaId]);
 
   const selecionarTurma = useCallback(async (turma: Turma | null) => {
     setTurmaSelecionada(turma);
+    setCarregando(true);
     if (turma && turma.id !== undefined && turma.id !== null) {
       await buscarAlunosByTurmaId(turma.id);
     }
+    setCarregando(false);
   }, [buscarAlunosByTurmaId]);
 
   const alterarData = useCallback((data: string) => {
@@ -707,7 +741,8 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
     buscarAlunosByTurmaId,
     isOnline,
     sincronizar,
-    syncStatus
+    syncStatus,
+    pendingPresencas
   }), [
     escolas,
     turmas,
@@ -732,7 +767,8 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
     buscarAlunosByTurmaId,
     isOnline,
     sincronizar,
-    syncStatus
+    syncStatus,
+    pendingPresencas
   ]);
 
   return (
