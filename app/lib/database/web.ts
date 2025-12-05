@@ -1,5 +1,5 @@
 // app/lib/database/web.ts
-import Dexie, { add, Table } from 'dexie';
+import Dexie, { Table } from 'dexie';
 import { Database, EscolaDB, TurmaDB, AlunoDB, PresencaDB } from './types';
 import { Presenca } from '@/app/types';
 
@@ -11,51 +11,64 @@ class WebDatabase extends Dexie implements Database {
 
   constructor() {
     super('escolaAppDB');
-    
-    this.version(3).stores({
-      escolas: '++id, name, address, createdAt, updatedAt, lastSync',
-      turmas: '++id, name, EscolaId, createdAt, updatedAt, lastSync, [EscolaId]',
-      alunos: '++id, name, TurmaId, createdAt, updatedAt, lastSync, [TurmaId]',
-      presencas: '++id, AlunoId, date, presente, observacao, lastSync, createdAt, updatedAt, [AlunoId+date]'
+
+    this.version(4).stores({
+      escolas: '++id, name, address, createdAt, updatedAt, synced',
+      turmas: '++id, name, EscolaId, createdAt, updatedAt, synced, [EscolaId]',
+      alunos: '++id, name, TurmaId, createdAt, updatedAt, synced, [TurmaId]',
+      presencas: '++id, AlunoId, date, presente, observacao, lastSync, synced, createdAt, updatedAt, [AlunoId+date]'
     });
+  }
+
+  async updateEscolaSyncStatus(id: number, synced: boolean): Promise<void> {
+    await this.escolas.update(id, { synced });
+  }
+
+  async updateTurmaSyncStatus(id: number, synced: boolean): Promise<void> {
+    await this.turmas.update(id, { synced });
+  }
+
+  async updateAlunoSyncStatus(id: number, synced: boolean): Promise<void> {
+    await this.alunos.update(id, { synced });
   }
   // Escola methods
-async getEscolas(): Promise<EscolaDB[]> {
-  return this.escolas.toArray();
-}
+  async getEscolas(): Promise<EscolaDB[]> {
+    return this.escolas.toArray();
+  }
 
-async getEscola(id: number): Promise<EscolaDB | undefined> {
-  return this.escolas.get(id);
-}
+  async getEscola(id: number): Promise<EscolaDB | undefined> {
+    return this.escolas.get(id);
+  }
 
-async saveEscola(escola: EscolaDB): Promise<number> {
-  const now = new Date().toISOString();
-  if (escola.id) {
-    await this.escolas.update(escola.id, {
+  async saveEscola(escola: EscolaDB): Promise<number> {
+    const now = new Date().toISOString();
+    if (escola.id) {
+      await this.escolas.update(escola.id, {
+        ...escola,
+        synced: true,
+        lastSync: now
+      });
+      return escola.id;
+    }
+    return this.escolas.add({
       ...escola,
       lastSync: now
     });
-    return escola.id;
   }
-  return this.escolas.add({
-    ...escola,
-    lastSync: now
-  });
-}
 
-async saveEscolas(escolas: EscolaDB[]): Promise<void> {
-  const now = new Date().toISOString();
-  await this.escolas.bulkPut(
-    escolas.map(escola => ({
-      ...escola,
-      lastSync: now
-    }))
-  );
-}
+  async saveEscolas(escolas: EscolaDB[]): Promise<void> {
+    const now = new Date().toISOString();
+    await this.escolas.bulkPut(
+      escolas.map(escola => ({
+        ...escola,
+        lastSync: now
+      }))
+    );
+  }
 
-async deleteEscola(id: number): Promise<void> {
-  await this.escolas.delete(id);
-}
+  async deleteEscola(id: number): Promise<void> {
+    await this.escolas.delete(id);
+  }
 
   // Turma methods
   async getTurmas(escolaId?: number): Promise<TurmaDB[]> {
@@ -74,12 +87,14 @@ async deleteEscola(id: number): Promise<void> {
     if (turma.id) {
       await this.turmas.update(turma.id, {
         ...turma,
+        synced: true,
         lastSync: now
       });
       return turma.id;
     }
     return this.turmas.add({
       ...turma,
+      synced: true,
       lastSync: now
     });
   }
@@ -89,6 +104,7 @@ async deleteEscola(id: number): Promise<void> {
     await this.turmas.bulkPut(
       turmas.map(t => ({
         ...t,
+        synced: true,
         lastSync: now
       }))
     );
@@ -115,12 +131,14 @@ async deleteEscola(id: number): Promise<void> {
     if (aluno.id) {
       await this.alunos.update(aluno.id, {
         ...aluno,
+        synced: true,
         lastSync: now
       });
       return aluno.id;
     }
     return this.alunos.add({
       ...aluno,
+      synced: true,
       lastSync: now
     });
   }
@@ -130,6 +148,7 @@ async deleteEscola(id: number): Promise<void> {
     await this.alunos.bulkPut(
       alunos.map(a => ({
         ...a,
+        synced: true,
         lastSync: now
       }))
     );
@@ -151,47 +170,43 @@ async deleteEscola(id: number): Promise<void> {
   async updatePresencasInAluno(alunoId: number, present: boolean, date: string, observacao: string = ''): Promise<number> {
     const aluno = await this.alunos.get(alunoId);
     if (!aluno) return 0;
-    
+
     let novasPresencas: Presenca[] = [];
 
-    if(aluno?.Presencas) {
+    if (aluno?.Presencas) {
       const existingPresencaIndex = aluno.Presencas.findIndex(p => p.date === date);
       if (existingPresencaIndex >= 0) {
         // Update existing presenca
         novasPresencas = [...aluno.Presencas];
-        novasPresencas[existingPresencaIndex] = { 
-          ...novasPresencas[existingPresencaIndex], 
+        novasPresencas[existingPresencaIndex] = {
+          ...novasPresencas[existingPresencaIndex],
           present,
           observacao: observacao || novasPresencas[existingPresencaIndex].observacao
         };
       } else {
         // Add new presenca
-        const novaPresenca: Presenca = { 
-          AlunoId: alunoId, 
-          date, 
-          present, 
+        const novaPresenca: Presenca = {
+          AlunoId: alunoId,
+          date,
+          present,
           observacao,
-          synced: false 
+          synced: false
         };
         novasPresencas = [...aluno.Presencas, novaPresenca];
       }
     } else {
-      const novaPresenca: Presenca = { 
-        AlunoId: alunoId, 
-        date, 
-        present, 
+      const novaPresenca: Presenca = {
+        AlunoId: alunoId,
+        date,
+        present,
         observacao,
-        synced: false 
+        synced: false
       };
       novasPresencas.push(novaPresenca);
     }
-    
+
     const updateAluno = await this.alunos.update(alunoId, {
       Presencas: novasPresencas,
-    });
-
-    console.log({
-      updateAluno
     });
 
     return updateAluno
@@ -199,34 +214,37 @@ async deleteEscola(id: number): Promise<void> {
 
   async savePresenca(presenca: PresencaDB): Promise<number> {
     const now = new Date().toISOString();
-    const presencaToSave:PresencaDB = {
+    const presencaToSave: PresencaDB = {
       ...presenca,
       lastSync: now,
     };
+
     if (presenca.id) {
       const update = await this.presencas.update(presenca.id, presencaToSave);
-      if(update) {
+      if (update) {
         await this.updatePresencasInAluno(
-          presenca.AlunoId, 
-          presenca.present, 
-          presenca.date, 
+          presenca.AlunoId,
+          presenca.present,
+          presenca.date,
           presenca.observacao
         );
       }
       return presenca.id;
-    }
-    const addPresenca =  await this.presencas.add(presencaToSave);
+    } else {
+      const addPresenca = await this.presencas.add(presencaToSave);
 
-    if(addPresenca) {
-      await this.updatePresencasInAluno(
-        presenca.AlunoId, 
-        presenca.present, 
-        presenca.date, 
-        presenca.observacao
-      );
-    }
+      if (addPresenca) {
+        await this.updatePresencasInAluno(
+          presenca.AlunoId,
+          presenca.present,
+          presenca.date,
+          presenca.observacao
+        );
+        return addPresenca
+      }
 
-    return addPresenca
+      return addPresenca
+    }
   }
 
   async savePresencas(presencas: PresencaDB[]): Promise<void> {
@@ -245,8 +263,8 @@ async deleteEscola(id: number): Promise<void> {
 
   async getPresencasPendentes(): Promise<PresencaDB[]> {
     return this.presencas
-      .where('lastSync')
-      .equals(undefined as any)
+      .where('synced')
+      .equals('')
       .toArray();
   }
 
@@ -261,10 +279,7 @@ async deleteEscola(id: number): Promise<void> {
 
   async updatePresencaSyncStatus(id: number, synced: boolean): Promise<void> {
     const now = new Date().toISOString();
-    console.log({
-      id, now, synced
-    })
-    await this.presencas.update(id, { lastSync: synced ? now : undefined });
+    await this.presencas.update(id, { synced, lastSync: now });
   }
 }
 

@@ -1,11 +1,11 @@
 import { Escola, Turma, Aluno, Presenca } from '../../types';
 
-export interface EscolaDB extends Omit<Escola, 'id' | 'synced'> { 
+export interface EscolaDB extends Omit<Escola, 'id'> { 
   id?: number;
   lastSync?: string;
 }
 
-export interface TurmaDB extends Omit<Turma, 'id' | 'synced'> {
+export interface TurmaDB extends Omit<Turma, 'id'> {
   id?: number;
   EscolaId: number | null;
   lastSync?: string;
@@ -18,7 +18,7 @@ export interface AlunoDB extends Omit<Aluno, 'id'> {
   turma?: TurmaDB | null;
 }
 
-export interface PresencaDB extends Omit<Presenca, 'id' | 'synced'> {
+export interface PresencaDB extends Omit<Presenca, 'id'> {
   id?: number;
   date: string;
   present: boolean;
@@ -26,6 +26,7 @@ export interface PresencaDB extends Omit<Presenca, 'id' | 'synced'> {
   AlunoId: number;
   lastSync?: string;
   aluno?: AlunoDB | null;
+  synced: boolean;
 }
 
 // If you need a type that includes presencas, create a new type
@@ -40,6 +41,7 @@ export interface Database {
   saveEscola: (escola: EscolaDB) => Promise<number>;
   saveEscolas: (escolas: EscolaDB[]) => Promise<void>;
   deleteEscola: (id: number) => Promise<void>;
+  updateEscolaSyncStatus: (id: number, synced: boolean) => Promise<void>;
   
   // Turmas
   getTurmas: (escolaId?: number) => Promise<TurmaDB[]>;
@@ -47,6 +49,7 @@ export interface Database {
   saveTurma: (turma: TurmaDB) => Promise<number>;
   saveTurmas: (turmas: TurmaDB[]) => Promise<void>;
   deleteTurma: (id: number) => Promise<void>;
+  updateTurmaSyncStatus: (id: number, synced: boolean) => Promise<void>;
   
   // Alunos
   getAlunos: (turmaId?: number) => Promise<AlunoDB[]>;
@@ -54,6 +57,7 @@ export interface Database {
   saveAluno: (aluno: AlunoDB) => Promise<number>;
   saveAlunos: (alunos: AlunoDB[]) => Promise<void>;
   deleteAluno: (id: number) => Promise<void>;
+  updateAlunoSyncStatus: (id: number, synced: boolean) => Promise<void>;
   
   // Presenças
   getPresencas: () => Promise<PresencaDB[]>;

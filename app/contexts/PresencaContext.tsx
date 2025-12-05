@@ -1,10 +1,77 @@
 // app/contexts/PresencaContext.tsx
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { Escola, Turma, Aluno, Presenca, PresencaContextData } from '../types';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo
+} from 'react';
+import { Platform } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+
+import {
+  Escola,
+  Turma,
+  Aluno,
+  Presenca,
+  PresencaContextData
+} from '../types';
+
 import { useApi } from '../hooks/useApi';
 import { AlunoDB, Database, initDatabase } from '../lib/database';
-import NetInfo from '@react-native-community/netinfo';
+import { EscolaDB, TurmaDB, PresencaDB } from '../lib/database/types';
 import { SyncService } from '../services/syncService';
+import { API_URL } from '@env';
+
+function mapDbEscolaToEscola(e: EscolaDB): Escola {
+  return {
+    id: e.id!,
+    name: e.name,
+    address: e.address,
+    createdAt: e.createdAt,
+    updatedAt: e.updatedAt,
+    synced: !!e.synced
+  };
+}
+
+function mapDbTurmaToTurma(t: TurmaDB): Turma {
+  return {
+    id: t.id!,
+    name: t.name,
+    EscolaId: t.EscolaId!,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    synced: !!t.synced
+  };
+}
+
+function mapDbAlunoToAluno(a: AlunoDB): Aluno {
+  return {
+    id: a.id!,
+    name: a.name,
+    TurmaId: a.TurmaId!,
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+    synced: !!a.synced,
+    Presencas: a.Presencas ?? []
+  };
+}
+
+function mapDbPresencaToPresenca(p: PresencaDB): Presenca {
+  return {
+    id: p.id!,
+    AlunoId: p.AlunoId!,
+    date: p.date,
+    present: !!p.present,
+    observacao: p.observacao,
+    synced: !!p.synced,
+    lastSync: p.lastSync,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt
+  };
+}
 
 const PresencaContext = createContext<PresencaContextData>({} as PresencaContextData);
 
@@ -13,7 +80,7 @@ interface PresencaProviderProps {
 }
 
 export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) => {
-  const [db, setDb] = useState<Database | null>(null);
+  // --- state ---
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [escolas, setEscolas] = useState<Escola[]>([]);
   const [turmas, setTurmas] = useState<Turma[]>([]);
@@ -21,545 +88,497 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
   const [presencas, setPresencas] = useState<Presenca[]>([]);
   const [escolaSelecionada, setEscolaSelecionada] = useState<Escola | null>(null);
   const [turmaSelecionada, setTurmaSelecionada] = useState<Turma | null>(null);
-  const [dataSelecionada, setDataSelecionada] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [dataSelecionada, setDataSelecionada] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
   const [carregando, setCarregando] = useState<boolean>(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<{ loading: boolean; lastSync?: Date; error?: string }>({ 
-  loading: false 
-});
-  const { request } = useApi();
-  const API_BASE_URL = 'http://localhost:3002';
+  const [syncStatus, setSyncStatus] = useState<{ loading: boolean; lastSync?: Date; error?: string }>({
+    loading: false
+  });
 
-  // Monitora o status da conexão
+  // --- refs to keep stable instances ---
+  const dbRef = useRef<Database | null>(null);
+  const initializingRef = useRef<Promise<Database> | null>(null);
+  const requestRef = useRef(useApi().request); // capture request initially
+  const syncServiceRef = useRef<SyncService | null>(null);
+  const isSyncingRef = useRef(false);
+
+  // Keep requestRef updated if useApi returns a new request (rare but safe)
+  const { request } = useApi();
   useEffect(() => {
-    console.log('entrou aqui')
-    let isMounted = true;
-    
-    const updateOnlineStatus = () => {
-      if (typeof navigator !== 'undefined' && navigator.onLine !== undefined) {
-        // Navegador
-        const handleOnline = () => isMounted && setIsOnline(true);
-        const handleOffline = () => isMounted && setIsOnline(false);
-        
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-        setIsOnline(navigator.onLine);
-        
-        return () => {
-          window.removeEventListener('online', handleOnline);
-          window.removeEventListener('offline', handleOffline);
-        };
-      } else {
-        // React Native
-        const unsubscribe = NetInfo.addEventListener(state => {
-          if (isMounted) {
-            setIsOnline(state.isConnected ?? false);
-          }
-        });
-        
-        return () => unsubscribe();
-      }
-    };
+    requestRef.current = request;
+  }, [request]);
+
+  // --- util helpers ---
+  const safeSetErro = useCallback((message: string | null) => {
+    setErro(message);
+  }, []);
+
+  // Initialize DB once on mount
+  useEffect(() => {
+    let mounted = true;
 
     const init = async () => {
-      console.log('entrou aqui')
       try {
-        const database = await initDatabase();
-        setDb(database);
-        console.log({
-          database,
-          isOnline
-        })
-        // Após inicializar o banco, carrega os dados iniciais se estiver online
-        if (isOnline) {
-          await carregarDadosIniciais({
-            db: database
-          });
+        // ensure only one initDatabase in-flight
+        if (!initializingRef.current) {
+          initializingRef.current = initDatabase();
         }
-      } catch (error) {
-        console.error('Erro ao inicializar o banco de dados:', error);
-        setErro('Falha ao inicializar o armazenamento local');
+        const db = await initializingRef.current;
+        if (!mounted) return;
+        dbRef.current = db;
+
+        // create sync service once db + request exist
+        if (!syncServiceRef.current) {
+          syncServiceRef.current = new SyncService(db, requestRef.current);
+        }
+
+        // load local data first
+        await loadLocalData();
+
+        // if online, perform an initial sync (non-blocking for UI)
+        // if (isOnline) {
+        //   void sincronizar(); // kick off but don't await here
+        // }
+      } catch (err) {
+        console.error('Erro ao inicializar DB:', err);
+        if (mounted) safeSetErro('Falha ao inicializar o armazenamento local');
       }
     };
-    
+
     init();
-    
-    const cleanup = updateOnlineStatus();
-    
+
     return () => {
-      isMounted = false;
-      if (cleanup) cleanup();
+      mounted = false;
     };
   }, []);
 
-  const syncService = useMemo(() => {
-    if (!db) return null;
-    return new SyncService(db, request);
-  }, [db, request]);
+  // --- Online/offline monitoring (single, cross-platform) ---
+  useEffect(() => {
+    let mounted = true;
 
-  const sincronizar = useCallback(async () => {
-    if (!syncService || !isOnline) {
-      setSyncStatus({ 
-        loading: false, 
-        error: 'Sem conexão com a internet' 
-      });
-      return;
+    const setOnlineState = (state: boolean) => {
+      if (!mounted) return;
+      setIsOnline(state);
+    };
+
+    // Web
+    if (typeof navigator !== 'undefined' && navigator.onLine !== undefined) {
+      const onOnline = () => {
+        setOnlineState(true);
+        // trigger sync when coming online
+        // void sincronizar();
+      };
+      const onOffline = () => setOnlineState(false);
+
+      window.addEventListener('online', onOnline);
+      window.addEventListener('offline', onOffline);
+      // initial
+      setOnlineState(navigator.onLine);
+
+      return () => {
+        mounted = false;
+        window.removeEventListener('online', onOnline);
+        window.removeEventListener('offline', onOffline);
+      };
     }
 
-    setEscolaSelecionada(null)
-    setTurmaSelecionada(null)
-    setSyncStatus({ loading: true });
+    // React Native
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const connected = state.isConnected ?? false;
+      setOnlineState(connected);
+      if (connected) {
+        // void sincronizar();
+      }
+    });
+
+    // initial fetch
+    NetInfo.fetch().then(s => {
+      if (!mounted) return;
+      setOnlineState(s.isConnected ?? false);
+    }).catch(() => { /* ignore */ });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []); // run once
+
+  // --- Helper: load local data into state (fast) ---
+  const loadLocalData = useCallback(async () => {
+    const db = dbRef.current;
+    if (!db) return;
+
     try {
-      // Push local changes
-      await syncService.syncAll();
-      // Pull latest data
-      await syncService.pullLatestData();
-      
-      setSyncStatus({ 
-        loading: false, 
-        lastSync: new Date() 
-      });
-      return true;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      setSyncStatus({ 
-        loading: false, 
-        error: `Falha na sincronização: ${errorMessage}` 
-      });
+      setCarregando(true);
+      // Load escolas, turmas, alunos, presencas from local DB
+      const [localEscolas, localTurmas, localAlunos, localPresencas] = await Promise.all([
+        db.getEscolas(),
+        db.getTurmas(),
+        db.getAlunos(),
+        db.getPresencas()
+      ]);
+
+      setEscolas(localEscolas.map(mapDbEscolaToEscola));
+
+      setTurmas(localTurmas.map(mapDbTurmaToTurma));
+
+      setAlunos(localAlunos.map(mapDbAlunoToAluno));
+
+      setPresencas(localPresencas.map(mapDbPresencaToPresenca));
+    } catch (err) {
+      console.error('Erro ao carregar dados locais:', err);
+      safeSetErro('Erro ao carregar dados locais');
+    } finally {
+      setCarregando(false);
+    }
+  }, [safeSetErro]);
+
+  // --- Sync: push & pull (single in-flight) ---
+  const sincronizar = useCallback(async (): Promise<boolean> => {
+    const db = dbRef.current;
+    const syncService = syncServiceRef.current;
+    if (!db || !syncService) {
+      setSyncStatus({ loading: false, error: 'Serviço de sincronização não inicializado' });
       return false;
     }
-  }, [syncService, isOnline]);
-
-  // Busca escolas da API ou do banco local
-  const buscarEscolas = useCallback(async (db?: Database) => {
-    if (!db) return;
+    if (!isOnline) {
+      setSyncStatus({ loading: false, error: 'Sem conexão com a internet' });
+      return false;
+    }
     
+    if (isSyncingRef.current) {
+      // já sincronizando
+      
+      return false;
+    }
+    setEscolas([]);
+    setTurmas([]);
+    setAlunos([]);
+    setPresencas([]);
+    setEscolaSelecionada(null);
+    setTurmaSelecionada(null);
+    isSyncingRef.current = true;
+    setSyncStatus({ loading: true });
+
+    try {
+      // Push local pending
+      await syncService.syncAll();
+      // Pull fresh state
+      await syncService.pullLatestData();
+
+      // Reload local into UI
+      await loadLocalData();
+
+      setSyncStatus({ loading: false, lastSync: new Date() });
+      return true;
+    } catch (err) {
+      console.error('Erro na sincronização:', err);
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+      setSyncStatus({ loading: false, error: `Falha na sincronização: ${msg}` });
+      return false;
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, [isOnline, loadLocalData]);
+
+  // --- Data fetching helpers (try remote then fallback local) ---
+  // All these functions use dbRef and requestRef to avoid unstable deps
+
+  const buscarEscolas = useCallback(async () => {
+    const db = dbRef.current;
+    if (!db) return;
     setCarregando(true);
     setErro(null);
 
     try {
       let escolasData: Escola[] = [];
 
-      // Tenta buscar da API se estiver online
       if (isOnline) {
         try {
-          const response = await request<Escola[]>(`${API_BASE_URL}/api/escolas`);
-          if (response) {
-            escolasData = response;
-            // Salva localmente
-            await db.saveEscolas(escolasData);
+          const resp = await requestRef.current<Escola[]>(`${API_URL}/api/escolas`);
+          if (resp && Array.isArray(resp)) {
+            escolasData = resp;
+            // normalize and save to local db
+            await db.saveEscolas(escolasData.map(e => ({
+              id: e.id,
+              name: e.name,
+              address: e.address,
+              createdAt: e.createdAt,
+              updatedAt: e.updatedAt,
+              synced: true
+            })));
           }
-        } catch (error) {
-          console.error('Erro ao buscar escolas da API:', error);
-          // Continua para tentar carregar do banco local
+        } catch (err) {
+          console.warn('API escolas falhou, usando local', err);
         }
       }
 
-      // Se não conseguiu buscar da API ou está offline, tenta do banco local
       if (escolasData.length === 0) {
-        const localEscolas = await db.getEscolas();
-        escolasData = localEscolas.map(e => ({
-          id: e.id!,
-          name: e.name,
-          address: e.address,
-          synced: true,
-          createdAt: e.createdAt,
-          updatedAt: e.updatedAt
-        }));
+        const local = await db.getEscolas();
+        escolasData = local.map(mapDbEscolaToEscola);
       }
 
       setEscolas(escolasData);
-    } catch (error) {
-      console.error('Erro ao buscar escolas:', error);
-      setErro('Não foi possível carregar as escolas. Verifique sua conexão.');
+    } catch (err) {
+      console.error('Erro ao buscar escolas:', err);
+      setErro('Não foi possível carregar as escolas.');
     } finally {
       setCarregando(false);
     }
-  }, [db, isOnline, request]);
+  }, [isOnline]);
 
-  const buscarTurmas = useCallback(async (db?: Database) => {
+  const buscarTurmas = useCallback(async () => {
+    const db = dbRef.current;
     if (!db) return;
-    
     setCarregando(true);
     setErro(null);
-    
+
     try {
       let turmasData: Turma[] = [];
-      
+
       if (isOnline) {
         try {
-          const response = await request<Turma[]>(`${API_BASE_URL}/api/turmas`);
-          if (response) {
-            turmasData = response;
-            // Convert Turma to TurmaDB before saving
-            const turmasDB = response.map(t => ({
+          const resp = await requestRef.current<Turma[]>(`${API_URL}/api/turmas`);
+          if (resp && Array.isArray(resp)) {
+            turmasData = resp;
+            await db.saveTurmas(resp.map(t => ({
               id: t.id,
               name: t.name,
               EscolaId: t.EscolaId,
               createdAt: t.createdAt,
-              updatedAt: t.updatedAt
-            }));
-            await db.saveTurmas(turmasDB);
-          }
-        } catch (error) {
-          console.error('Erro ao buscar turmas da API:', error);
-          // Continua para tentar carregar do banco local
-        }
-      }
-      
-      // Se não conseguiu buscar da API ou está offline, tenta do banco local
-      if (turmasData.length === 0) {
-        const localTurmas = await db.getTurmas();
-        turmasData = localTurmas.map(t => ({
-          id: t.id!,
-          name: t.name,
-          EscolaId: t.EscolaId!,
-          createdAt: t.createdAt,
-          updatedAt: t.updatedAt,
-          synced: true
-        }));
-      }
-      
-      setTurmas(turmasData);
-    } catch (error) {
-      console.error('Erro ao buscar turmas:', error);
-      setErro('Não foi possível carregar as turmas. Verifique sua conexão.');
-    } finally {
-      setCarregando(false);
-    }
-  }, [db, isOnline, request]); 
-  
-  // Função para buscar turmas
-  const buscarTurmasByEscolaId = useCallback(async (escolaId: number) => {
-    if (!db) return;
-    
-    setCarregando(true);
-    setErro(null);
-    
-    try {
-      let turmasData: Turma[] = [];
-      
-      if (isOnline) {
-        try {
-          const response = await request<Turma[]>(`${API_BASE_URL}/api/escolas/${escolaId}/turmas`);
-          if (response) {
-            turmasData = response;
-            // Convert Turma to TurmaDB before saving
-            const turmasDB = response.map(t => ({
-              id: t.id,
-              name: t.name,
-              EscolaId: t.EscolaId,
-              createdAt: t.createdAt,
-              updatedAt: t.updatedAt
-            }));
-            await db.saveTurmas(turmasDB);
-          }
-        } catch (error) {
-          console.error('Erro ao buscar turmas da API:', error);
-        }
-      }
-      
-      if (turmasData.length === 0) {
-        const localTurmas = await db.getTurmas(escolaId);
-        turmasData = localTurmas.map(t => ({
-          id: t.id!,
-          name: t.name,
-          EscolaId: t.EscolaId!,
-          createdAt: t.createdAt,
-          updatedAt: t.updatedAt,
-          synced: true
-        }));
-      }
-      
-      setTurmas(turmasData);
-    } catch (error) {
-      console.error('Erro ao buscar turmas:', error);
-      setErro('Não foi possível carregar as turmas. Verifique sua conexão.');
-    } finally {
-      setCarregando(false);
-    }
-  }, [db, isOnline, request]);
-
-  const buscarAlunos = useCallback(async (db?: Database) => {
-    if (!db) return;
-    
-    setCarregando(true);
-    setErro(null);
-    
-    try {
-      let alunosData: Aluno[] = [];
-      
-      if (isOnline) {
-        try {
-          const response = await request<Aluno[]>(`${API_BASE_URL}/api/alunos`);
-          if (response) {
-            alunosData = response;
-            // Convert Aluno to AlunoDB before saving
-            const alunosDB: AlunoDB[] = alunosData.map(a => ({
-              id: a.id,
-              name: a.name,
-              TurmaId: a.TurmaId!,
-              createdAt: a.createdAt,
-              updatedAt: a.updatedAt,
-              Presencas: a.Presencas ?? [],
+              updatedAt: t.updatedAt,
               synced: true
-            }));
-            await db.saveAlunos(alunosDB);
+            })));
           }
-        } catch (error) {
-          console.error('Erro ao buscar alunos da API:', error);
+        } catch (err) {
+          console.warn('API turmas falhou, usando local', err);
         }
       }
-      
-      if (alunosData.length === 0) {
-        const localAlunos = await db.getAlunos();
-        alunosData = localAlunos.map(a => ({
-          id: a.id!,
-          name: a.name,
-          TurmaId: a.TurmaId!,
-          createdAt: a.createdAt,
-          updatedAt: a.updatedAt,
-          synced: true,
-          Presencas: a.Presencas ?? []
-        }));
+
+      if (turmasData.length === 0) {
+        const local = await db.getTurmas();
+        turmasData = local.map(mapDbTurmaToTurma);
       }
-      
-      setAlunos(alunosData);
-    } catch (error) {
-      console.error('Erro ao buscar alunos:', error);
-      setErro('Não foi possível carregar os alunos. Verifique sua conexão.');
+
+      setTurmas(turmasData);
+    } catch (err) {
+      console.error('Erro ao buscar turmas:', err);
+      setErro('Não foi possível carregar as turmas.');
     } finally {
       setCarregando(false);
     }
-  }, [db, isOnline, request]);
-  
-  // Função para buscar alunos
-  const buscarAlunosByTurmaId = useCallback(async (turmaId: number) => {
+  }, [isOnline]);
+
+  const buscarTurmasByEscolaId = useCallback(async (escolaId: number) => {
+    const db = dbRef.current;
     if (!db) return;
-    
     setCarregando(true);
     setErro(null);
-    
+
     try {
-      let alunosData: Aluno[] = [];
-      
+      let turmasData: Turma[] = [];
+
       if (isOnline) {
         try {
-          const response = await request<Aluno[]>(`${API_BASE_URL}/api/turmas/${turmaId}/alunos`);
-          if (response) {
-            alunosData = response;
-            // Convert Aluno to AlunoDB before saving
-            const alunosDB: AlunoDB[] = alunosData.map(a => ({
-              id: a.id,
-              name: a.name,
-              TurmaId: a.TurmaId!,
-              createdAt: a.createdAt,
-              updatedAt: a.updatedAt,
-              synced: true,
-              Presencas: a.Presencas ?? []
-            }));
-            await db.saveAlunos(alunosDB);
+          const resp = await requestRef.current<Turma[]>(`${API_URL}/api/escolas/${escolaId}/turmas`);
+          if (resp && Array.isArray(resp)) {
+            turmasData = resp;
+            await db.saveTurmas(resp.map(t => ({
+              id: t.id,
+              name: t.name,
+              EscolaId: t.EscolaId,
+              createdAt: t.createdAt,
+              updatedAt: t.updatedAt,
+              synced: true
+            })));
           }
-        } catch (error) {
-          console.error('Erro ao buscar alunos da API:', error);
+        } catch (err) {
+          console.warn('API turmas por escola falhou, usando local', err);
         }
       }
-      
+
+      if (turmasData.length === 0) {
+        const local = await db.getTurmas(escolaId);
+        turmasData = local.map(mapDbTurmaToTurma);
+      }
+
+      setTurmas(turmasData);
+    } catch (err) {
+      console.error('Erro ao buscar turmas por escola:', err);
+      setErro('Não foi possível carregar as turmas.');
+    } finally {
+      setCarregando(false);
+    }
+  }, [isOnline]);
+
+  const buscarAlunos = useCallback(async () => {
+    const db = dbRef.current;
+    if (!db) return;
+    setCarregando(true);
+    setErro(null);
+
+    try {
+      let alunosData: Aluno[] = [];
+
+      if (isOnline) {
+        try {
+          const resp = await requestRef.current<Aluno[]>(`${API_URL}/api/alunos`);
+          if (resp && Array.isArray(resp)) {
+            alunosData = resp;
+            await db.saveAlunos(resp.map(a => {
+              if(!a.TurmaId) return;
+
+              return {
+                id: a.id,
+                name: a.name,
+                TurmaId: a?.TurmaId ?? 0,
+                createdAt: a.createdAt,
+                updatedAt: a.updatedAt,
+                Presencas: a.Presencas ?? [],
+                synced: true,
+              };
+            }).filter(a => !!a));
+          }
+        } catch (err) {
+          console.warn('API alunos falhou, usando local', err);
+        }
+      }
+
       if (alunosData.length === 0) {
-        const localAlunos = await db.getAlunos(turmaId);
-        alunosData = localAlunos.map(a => ({
-          id: a.id!,
-          name: a.name,
-          TurmaId: a.TurmaId!,
-          createdAt: a.createdAt,
-          updatedAt: a.updatedAt,
-          synced: true,
-          Presencas: a.Presencas ?? []
-        }));
+        const local = await db.getAlunos();
+        alunosData = local.map(mapDbAlunoToAluno);
       }
 
       setAlunos(alunosData);
-    } catch (error) {
-      console.error('Erro ao buscar alunos:', error);
-      setErro('Não foi possível carregar os alunos. Verifique sua conexão.');
+    } catch (err) {
+      console.error('Erro ao buscar alunos:', err);
+      setErro('Não foi possível carregar os alunos.');
     } finally {
       setCarregando(false);
     }
-  }, [db, isOnline, request]);
+  }, [isOnline]);
 
-  // Função para carregar todos os dados iniciais
-  const carregarDadosIniciais = useCallback(async ({db}: { db: Database}) => {
-    console.log('entrou aqui1')
+  const buscarAlunosByTurmaId = useCallback(async (turmaId: number) => {
+    const db = dbRef.current;
     if (!db) return;
-    console.log('entrou aqui2')
-    try {
-      setCarregando(true);
-      setErro(null);
-      
-      await buscarEscolas(db);
-      await buscarTurmas(db);
-      await buscarAlunos(db);
-      
-      console.log('Dados iniciais carregados com sucesso');
-    } catch (error) {
-      console.error('Erro ao carregar dados iniciais:', error);
-      setErro('Não foi possível carregar todos os dados iniciais');
-    } finally {
-      setCarregando(false);
-    }
-  }, [db, buscarEscolas, buscarTurmas, buscarAlunos, escolas, turmas]);
-
-  // Monitora o status da conexão
-  useEffect(() => {
-    let isMounted = true;
-    
-    const updateOnlineStatus = () => {
-      if (typeof navigator !== 'undefined' && navigator.onLine !== undefined) {
-        // Navegador
-        const handleOnline = () => isMounted && setIsOnline(true);
-        const handleOffline = () => isMounted && setIsOnline(false);
-        
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-        
-        // Sincroniza quando voltar a ficar online
-        const handleOnlineWithSync = async () => {
-          if (isMounted) {
-            setIsOnline(true);
-            await sincronizar();
-          }
-        };
-        
-        window.addEventListener('online', handleOnlineWithSync);
-        
-        // Define o estado inicial
-        setIsOnline(navigator.onLine);
-        
-        return () => {
-          window.removeEventListener('online', handleOnline);
-          window.removeEventListener('offline', handleOffline);
-          window.removeEventListener('online', handleOnlineWithSync);
-        };
-      } else {
-        // React Native
-        const unsubscribe = NetInfo.addEventListener(state => {
-          if (isMounted) {
-            const isConnected = state.isConnected ?? false;
-            setIsOnline(isConnected);
-            
-            // Sincroniza quando voltar a ficar online
-            if (isConnected) {
-              sincronizar();
-            }
-          }
-        });
-        
-        // Verifica o estado inicial
-        NetInfo.fetch().then(state => {
-          if (isMounted) {
-            setIsOnline(state.isConnected ?? false);
-          }
-        });
-        
-        return () => unsubscribe();
-      }
-    };
-    
-    const cleanup = updateOnlineStatus();
-    
-    return () => {
-      isMounted = false;
-      if (cleanup) cleanup();
-    };
-  }, [sincronizar, isOnline]);
-
-  // Função para buscar presenças por aluno
-  const buscarPresencasPorAluno = useCallback(async (alunoId: number, date?: string) => {
-    if (!db) return;
-    
     setCarregando(true);
     setErro(null);
-    
+
+    try {
+      let alunosData: Aluno[] = [];
+
+      if (isOnline) {
+        try {
+          const resp = await requestRef.current<Aluno[]>(`${API_URL}/api/turmas/${turmaId}/alunos`);
+          if (resp && Array.isArray(resp)) {
+            alunosData = resp;
+            await db.saveAlunos(resp.map(a => {
+              if(!a.TurmaId) return;
+
+              return {
+                id: a.id,
+                name: a.name,
+                TurmaId: a.TurmaId,
+                createdAt: a.createdAt,
+                updatedAt: a.updatedAt,
+                Presencas: a.Presencas ?? [],
+                synced: true
+              };
+            }).filter(a => !!a));
+          }
+        } catch (err) {
+          console.warn('API alunos por turma falhou, usando local', err);
+        }
+      }
+
+      if (alunosData.length === 0) {
+        const local = await db.getAlunos(turmaId);
+        alunosData = local.map(mapDbAlunoToAluno);
+      }
+
+      setAlunos(alunosData);
+    } catch (err) {
+      console.error('Erro ao buscar alunos por turma:', err);
+      setErro('Não foi possível carregar os alunos.');
+    } finally {
+      setCarregando(false);
+    }
+  }, [isOnline]);
+
+  const buscarPresencasPorAluno = useCallback(async (alunoId: number, date?: string) => {
+    const db = dbRef.current;
+    if (!db) return;
+    setCarregando(true);
+    setErro(null);
+
     try {
       let presencasData: Presenca[] = [];
-      let url = `${API_BASE_URL}/api/alunos/${alunoId}/presencas`;
-      
-      // Adiciona parâmetros de data se fornecidos
+
+      // build url
+      let url = `${API_URL}/api/alunos/${alunoId}/presencas`;
       const params = new URLSearchParams();
       if (date) params.append('date', date);
-      
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
-      
+      if (params.toString()) url += `?${params.toString()}`;
+
       if (isOnline) {
         try {
-          const response = await request<Presenca[]>(url);
-          if (response) {
-            presencasData = response.map(p => ({
+          const resp = await requestRef.current<Presenca[]>(url);
+          if (resp && Array.isArray(resp)) {
+            presencasData = resp.map(p => ({
               id: p.id,
               AlunoId: p.AlunoId,
               date: p.date,
               present: p.present,
+              observacao: p.observacao,
               synced: true,
               lastSync: p.lastSync,
               createdAt: p.createdAt,
               updatedAt: p.updatedAt
             }));
-            console.log('Presenças da API:', response);
             await db.savePresencas(presencasData);
           }
-        } catch (error) {
-          console.error('Erro ao buscar presenças da API:', error);
+        } catch (err) {
+          console.warn('API presencas por aluno falhou, usando local', err);
         }
       }
-      
-      // Se não encontrou online ou está offline, busca do banco local
+
       if (presencasData.length === 0) {
-        const localPresencas = await db.getPresencas();
-        presencasData = localPresencas
+        const local = await db.getPresencas();
+        presencasData = local
           .filter(p => p.AlunoId === alunoId && (!date || p.date === date))
-          .map(p => ({
-            id: p.id!,
-            AlunoId: p.AlunoId!,
-            date: p.date,
-            present: p.present,
-            synced: true,
-            lastSync: p.lastSync,
-            createdAt: p.createdAt,
-            updatedAt: p.updatedAt
-          }));
+          .map(mapDbPresencaToPresenca);
       }
-      
+
       setPresencas(presencasData);
-    } catch (error) {
-      console.error('Erro ao buscar presenças:', error);
-      setErro('Não foi possível carregar as presenças. Verifique sua conexão.');
+    } catch (err) {
+      console.error('Erro ao buscar presenças por aluno:', err);
+      setErro('Não foi possível carregar as presenças.');
     } finally {
       setCarregando(false);
     }
-  }, [db, isOnline, request]);
+  }, [isOnline]);
 
-
-  // Função para buscar todas as presenças sem filtro
   const buscarPresencasSemFiltro = useCallback(async () => {
+    const db = dbRef.current;
     if (!db) return;
-    
     setCarregando(true);
     setErro(null);
-    
+
     try {
       let presencasData: Presenca[] = [];
-      
+
       if (isOnline) {
         try {
-          const response = await request<Presenca[]>(`${API_BASE_URL}/api/presencas`);
-          if (response) {
-            presencasData = response.map(p => ({
+          const resp = await requestRef.current<Presenca[]>(`${API_URL}/api/presencas`);
+          if (resp && Array.isArray(resp)) {
+            presencasData = resp.map(p => ({
               id: p.id,
               AlunoId: p.AlunoId,
               date: p.date,
               present: p.present,
+              observacao: p.observacao,
               synced: true,
               lastSync: p.lastSync,
               createdAt: p.createdAt,
@@ -567,37 +586,28 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
             }));
             await db.savePresencas(presencasData);
           }
-        } catch (error) {
-          console.error('Erro ao buscar presenças da API:', error);
+        } catch (err) {
+          console.warn('API presencas falhou, usando local', err);
         }
       }
-      
-      // Se não encontrou online ou está offline, busca do banco local
+
       if (presencasData.length === 0) {
-        const localPresencas = await db.getPresencas();
-        presencasData = localPresencas.map(p => ({
-          id: p.id!,
-          AlunoId: p.AlunoId!,
-          date: p.date,
-          present: p.present,
-          synced: true,
-          lastSync: p.lastSync,
-          createdAt: p.createdAt,
-          updatedAt: p.updatedAt
-        }));
+        const local = await db.getPresencas();
+        presencasData = local.map(mapDbPresencaToPresenca);
       }
-      
+
       setPresencas(presencasData);
-    } catch (error) {
-      console.error('Erro ao buscar presenças:', error);
-      setErro('Não foi possível carregar as presenças. Verifique sua conexão.');
+    } catch (err) {
+      console.error('Erro ao buscar presenças:', err);
+      setErro('Não foi possível carregar as presenças.');
     } finally {
       setCarregando(false);
     }
-  }, [db, isOnline, request]);
+  }, [isOnline]);
 
-  // Função para registrar presença
+  // --- registrar presença (local-first) ---
   const registrarPresenca = useCallback(async (alunoId: number, presente: boolean, observacao?: string) => {
+    const db = dbRef.current;
     if (!db) return false;
 
     const now = new Date().toISOString();
@@ -605,118 +615,128 @@ export const PresencaProvider: React.FC<PresencaProviderProps> = ({ children }) 
       AlunoId: alunoId,
       date: dataSelecionada,
       present: presente,
-      observacao: observacao,
+      observacao: observacao ?? '',
       createdAt: now,
       updatedAt: now,
-      synced: !isOnline // Se estiver offline, marca como não sincronizado
+      synced: isOnline // mark true only if we can persist synced state meaningfully; we'll update later if we actually send
     };
-    
-    try {
-      // Salva localmente primeiro
-      await db.savePresenca(novaPresenca);
-      
-      // Atualiza o estado local
-      const presencasAtualizadas = await db.getPresencas();
-      setPresencas(presencasAtualizadas.map(p => ({
-        id: p.id!,
-        AlunoId: p.AlunoId!,
-        date: p.date,
-        present: p.present,
-        observacao: p.observacao,
-        synced: false,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt
-      })));
 
-      // Se estiver online, tenta sincronizar
+    try {
+      setCarregando(true);
+      await db.savePresenca(novaPresenca);
+
+      // Update UI from local DB for stable truth
+      const local = await db.getPresencas();
+      setPresencas(local.map(mapDbPresencaToPresenca));
+
+      // If online, try immediate network post (best-effort)
       if (isOnline) {
         try {
-          const response = await request(`${API_BASE_URL}/api/presencas`, {
+          const resp = await requestRef.current(`${API_URL}/api/presencas`, {
             method: 'POST',
             body: JSON.stringify(novaPresenca)
           });
-          if(response) {
-            novaPresenca.id = response.id;
+          if (resp && resp.id) {
+            // set as synced in local DB
+            await db.updatePresencaSyncStatus(resp.id, true);
+            // reload local presencas
+            const reloaded = await db.getPresencas();
+            setPresencas(reloaded.map(mapDbPresencaToPresenca));
           }
-          // Atualiza como sincronizado no banco local
-          await db.updatePresencaSyncStatus(novaPresenca.id!, true);
-        } catch (error) {
-          console.error('Erro ao sincronizar presença:', error);
-          // Não precisa fazer nada, a sincronização será tentada novamente depois
+        } catch (err) {
+          console.warn('Não foi possível enviar presença agora — ficará pendente para próxima sincronização', err);
         }
       }
 
       return true;
-    } catch (error) {
-      console.error('Erro ao salvar presença localmente:', error);
+    } catch (err) {
+      console.error('Erro ao salvar presença localmente:', err);
+      setErro('Erro ao registrar presença.');
       return false;
+    } finally {
+      setCarregando(false);
     }
-  }, [db, dataSelecionada, isOnline, request]);
+  }, [dataSelecionada, isOnline]);
 
-
-  // Função para selecionar escola
-  const selecionarEscola = useCallback(async (escola: Escola) => {
+  // --- selectors / UI helpers ---
+  const selecionarEscola = useCallback(async (escola: Escola | null) => {
     setEscolaSelecionada(escola);
     setTurmaSelecionada(null);
-    if (escola.id !== undefined && escola.id !== null) {
+    if (escola && escola.id !== undefined && escola.id !== null) {
       await buscarTurmasByEscolaId(escola.id);
     }
-  }, [buscarTurmas]);
+  }, [buscarTurmasByEscolaId]);
 
-  // Função para selecionar turma
-  const selecionarTurma = useCallback(async (turma: Turma) => {
+  const selecionarTurma = useCallback(async (turma: Turma | null) => {
     setTurmaSelecionada(turma);
-    if (turma.id !== undefined && turma.id !== null) {
+    if (turma && turma.id !== undefined && turma.id !== null) {
       await buscarAlunosByTurmaId(turma.id);
     }
-  }, [buscarAlunos]);
+  }, [buscarAlunosByTurmaId]);
 
-  // Função para alterar a data selecionada
   const alterarData = useCallback((data: string) => {
     setDataSelecionada(data);
   }, []);
 
-  // Efeito para carregar as escolas quando o banco estiver pronto
-  useEffect(() => {
-    if (db) {
-      buscarEscolas();
-    }
-  }, [db, buscarEscolas]);
-
-  // Alterar aluno
   const alterarAluno = useCallback(async (aluno: Aluno) => {
-    setAlunos(alunos.map(a => a.id === aluno.id ? aluno : a));
-  }, [alunos]);
-  
+    setAlunos(prev => prev.map(a => a.id === aluno.id ? aluno : a));
+  }, []);
+
+  // Expose context value (memoized)
+  const contextValue = useMemo(() => ({
+    escolas,
+    turmas,
+    alunos,
+    presencas,
+    escolaSelecionada,
+    turmaSelecionada,
+    dataSelecionada,
+    carregando,
+    erro,
+    buscarEscolas,
+    selecionarEscola,
+    buscarTurmas,
+    selecionarTurma,
+    buscarAlunos,
+    buscarPresencasPorAluno,
+    buscarPresencasSemFiltro,
+    registrarPresenca,
+    alterarData,
+    alterarAluno,
+    buscarTurmasByEscolaId,
+    buscarAlunosByTurmaId,
+    isOnline,
+    sincronizar,
+    syncStatus
+  }), [
+    escolas,
+    turmas,
+    alunos,
+    presencas,
+    escolaSelecionada,
+    turmaSelecionada,
+    dataSelecionada,
+    carregando,
+    erro,
+    buscarEscolas,
+    selecionarEscola,
+    buscarTurmas,
+    selecionarTurma,
+    buscarAlunos,
+    buscarPresencasPorAluno,
+    buscarPresencasSemFiltro,
+    registrarPresenca,
+    alterarData,
+    alterarAluno,
+    buscarTurmasByEscolaId,
+    buscarAlunosByTurmaId,
+    isOnline,
+    sincronizar,
+    syncStatus
+  ]);
+
   return (
-    <PresencaContext.Provider
-      value={{
-        escolas,
-        turmas,
-        alunos,
-        presencas,
-        escolaSelecionada,
-        turmaSelecionada,
-        dataSelecionada,
-        carregando,
-        erro,
-        buscarEscolas,
-        selecionarEscola,
-        buscarTurmas,
-        selecionarTurma,
-        buscarAlunos,
-        buscarPresencasPorAluno,
-        buscarPresencasSemFiltro,
-        registrarPresenca,
-        alterarData,
-        alterarAluno,
-        buscarTurmasByEscolaId,
-        buscarAlunosByTurmaId,
-        isOnline,
-        sincronizar,
-        syncStatus
-      }}
-    >
+    <PresencaContext.Provider value={contextValue}>
       {children}
     </PresencaContext.Provider>
   );

@@ -1,20 +1,36 @@
 import { Platform } from 'react-native';
 import { init as initWebDB } from './web';
-import { init as initMobileDB } from './mobile';
+import { init as initNativeDB } from './native';
 import { Database } from './types';
 
-let db: Database;
+let dbInstance: Database | null = null;
+let initializing: Promise<Database> | null = null;
 
 export const initDatabase = async (): Promise<Database> => {
-  if (!db) {
-    if (Platform.OS === 'web') {
-      db = await initWebDB();
-    } else {
-      db = await initMobileDB();
-    }
+  // Retorna a instância se já estiver criada
+  if (dbInstance) {
+    return dbInstance;
   }
-  return db;
+
+  // Evita múltiplas inicializações simultâneas
+  if (!initializing) {
+    initializing = (async () => {
+      const instance =
+        Platform.OS === 'web'
+          ? await initWebDB()
+          : await initNativeDB();
+
+      if (!instance) {
+        throw new Error('Database instance could not be initialized');
+      }
+
+      dbInstance = instance;
+      return instance;
+    })();
+  }
+
+  return initializing;
 };
 
-// Tipos comuns
+// Re-exporta os tipos
 export * from './types';

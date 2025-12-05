@@ -16,6 +16,13 @@ export default defineConfig([
     }
   },
   {
-    ignores: ["node_modules/", "dist/", ".expo/", "babel.config.js", "node_modules/**", "dist/**", ".expo/**", "yarn.lock", "package-lock.json", "pnpm-lock.yaml", ".git/**", ".github/**", ".vscode/**", "coverage/**", "ios/**", "android/**", "Pods/**", "node_modules/**/*.*", "web-build/**", "*.test.*", "*.spec.*", "src/**/*.test.ts", "src/**/*.test.tsx"]
+    ignores: ["node_modules/", "dist/", ".expo/", "babel.config.js", "node_modules/**", "dist/**", ".expo/**", "yarn.lock", "package-lock.json", "pnpm-lock.yaml", ".git/**", ".github/**", ".vscode/**", "coverage/**", "ios/**", "android/**", "Pods/**", "node_modules/**/*.*", "web-build/**", "*.test.*", "*.spec.*", "src/**/*.test.ts", "src/**/*.test.tsx", "metro.config.js"]
+  },
+  {
+    settings: {
+      react: {
+        "version": "detect"
+      }
+    }
   }
 ]);

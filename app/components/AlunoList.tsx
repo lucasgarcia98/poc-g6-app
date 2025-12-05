@@ -47,7 +47,20 @@ const AlunoList: React.FC = () => {
       if (presenca) {
         presenca.present = !present;
         presenca.observacao = observacoes[alunoId] || '';
+      } else {
+        aluno.Presencas?.push({
+          AlunoId: alunoId,
+          date: dataSelecionada,
+          present: !present,
+          observacao: observacoes[alunoId] || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          synced: false
+        });
       }
+      console.log({
+        aluno
+      })
       alterarAluno(aluno);
     }
   };

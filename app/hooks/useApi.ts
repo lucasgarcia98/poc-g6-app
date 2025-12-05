@@ -9,14 +9,6 @@ interface UseApiOptions {
   retryDelay?: number;
 }
 
-interface ApiResponse<T> {
-  data: T | null;
-  loading: boolean;
-  error: string | null;
-  request: <R = T>(...args: any[]) => Promise<R | null>;
-  clearError: () => void;
-}
-
 export function useApi<T = any>(): {
   data: T | null;
   loading: boolean;

@@ -21,10 +21,22 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.lucasgarcia998.pocg6app"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "webpack": "./webpack.config.js",
+      "build": {
+        "babel": {
+          "include": ["@expo/vector-icons"]
+        }
+      }
     },
     "plugins": [
       [
@@ -33,7 +45,25 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera."
         }
       ],
-      "expo-sqlite"
-    ]
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true,
+          "useSQLCipher": true,
+          "android": {
+            "enableFTS": false,
+            "useSQLCipher": false
+          },
+          "ios": {
+            "customBuildFlags": ["-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_ENABLE_SNAPSHOT=1"]
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4d4940d3-4d5f-42c2-9b2a-cbdbecb4f23f"
+      }
+    }
   }
 }
