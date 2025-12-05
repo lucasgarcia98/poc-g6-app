@@ -1,5 +1,5 @@
 // app/hooks/useApi.ts
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 
 interface UseApiOptions {
   onSuccess?: (data: any) => void;
@@ -24,16 +24,6 @@ export function useApi<T = any>(): {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const activeRequests = useRef<AbortController[]>([]);
-
-  // Clean up any pending requests on unmount
-  useEffect(() => {
-    return () => {
-      activeRequests.current.forEach(controller => controller.abort());
-      activeRequests.current = [];
-    };
-  }, []);
-
   const request = useCallback(
     async<R = T> (
       url: string,
@@ -43,24 +33,17 @@ export function useApi<T = any>(): {
         onError,
       }: UseApiOptions = {}
     ): Promise<R | null> => {
-      const controller = new AbortController();
-      activeRequests.current.push(controller);
-
       try {
         setLoading(true);
         setError(null);
 
         const response = await fetch(url, {
           ...options,
-          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
             ...options.headers,
           },
         });
-
-        // Remove this request from active requests
-        activeRequests.current = activeRequests.current.filter(c => c !== controller);
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
@@ -78,9 +61,6 @@ export function useApi<T = any>(): {
 
         return responseData;
       } catch (err) {
-        // Remove this request from active requests
-        activeRequests.current = activeRequests.current.filter(c => c !== controller);
-
         const errorMessage =
           err instanceof Error ? err.message : 'Ocorreu um erro desconhecido';
 

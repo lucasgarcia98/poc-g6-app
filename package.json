@@ -46,7 +46,6 @@
     "@types/minimatch": "^6.0.0",
     "@types/node": "^24.10.1",
     "@types/react": "~19.1.10",
-    "@types/react-native": "^0.73.0",
     "babel-plugin-inline-dotenv": "^1.7.0",
     "babel-plugin-transform-typescript-metadata": "^0.4.0",
     "eslint": "^9.39.1",

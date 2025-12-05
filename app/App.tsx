@@ -1,4 +1,5 @@
 // app/App.tsx
+import './polyfills/noAbortNative';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View, Text } from 'react-native';
@@ -8,7 +9,6 @@ import TurmaList from './components/TurmaList';
 import AlunoList from './components/AlunoList';
 import DataSelector from './components/DataSelector';
 import Sincronizar from './components/Sincronizar';
-import './polyfills/noAbortNative';
 
 const AppContent: React.FC = () => {
   return (
